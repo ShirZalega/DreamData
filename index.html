@@ -36,9 +36,6 @@
             text-align: center;
             margin-bottom: 40px;
         }
-        input[type="file"] {
-            display: none;
-        }
         .upload-btn {
             background-color: var(--accent);
             color: #0f172a;
@@ -47,6 +44,7 @@
             font-size: 1.1rem;
             font-weight: bold;
             cursor: pointer;
+            border: none;
             transition: opacity 0.2s;
         }
         .upload-btn:hover {
@@ -111,6 +109,12 @@
             color: var(--rem-color);
             line-height: 1.4;
         }
+        #loading {
+            display: none;
+            color: var(--accent);
+            margin-top: 15px;
+            font-size: 1.2rem;
+        }
     </style>
 </head>
 <body>
@@ -119,69 +123,76 @@
     <p class="subtitle">A smart bridge between lines of code and the quality of your brain's rest</p>
 
     <div class="upload-section">
-        <label for="json-upload" class="upload-btn">Select JSON data files from your data folder</label>
-        <input type="file" id="json-upload" multiple accept=".json">
+        <button id="fetch-btn" class="upload-btn" onclick="fetchDataFromGitHub()">Sync from GitHub Cloud ☁️</button>
+        <div id="loading">Fetching sleep data... please wait ⏳</div>
     </div>
 
     <div id="dashboard" class="dashboard">
         <h2>Overall Overview (Averages)</h2>
-        <div class="overall-stats" id="overall-container">
-            </div>
-
+        <div class="overall-stats" id="overall-container"></div>
         <h2>Daily Breakdown</h2>
-        <div class="daily-grid" id="daily-container">
-            </div>
+        <div class="daily-grid" id="daily-container"></div>
     </div>
 
     <script>
-        document.getElementById('json-upload').addEventListener('change', handleFiles);
+        // ==========================================
+        // Update these 3 lines according to your GitHub details:
+        // ==========================================
+        const GITHUB_USERNAME = "ShirZalega"; // Your GitHub username (e.g., ShirZeliga)
+        const REPO_NAME = "DreamData"; // Repository name
+        const FOLDER_PATH = "sleep_data"; // The folder where your JSON files are stored (e.g., data or sleep_data)
+        // ==========================================
 
-        function handleFiles(event) {
-            const files = event.target.files;
-            if (files.length === 0) return;
+        async function fetchDataFromGitHub() {
+            document.getElementById('fetch-btn').style.display = 'none';
+            document.getElementById('loading').style.display = 'block';
 
-            let allData = [];
-            let filesRead = 0;
+            try {
+                // Fetch the list of files (no permissions needed for public repos)
+                const apiUrl = `https://api.github.com/repos/${GITHUB_USERNAME}/${REPO_NAME}/contents/${FOLDER_PATH}`;
+                const response = await fetch(apiUrl);
 
-            for (let i = 0; i < files.length; i++) {
-                const file = files[i];
-                const reader = new FileReader();
+                if (!response.ok) {
+                    throw new Error("Could not connect to GitHub. Check your username, repo, and folder name.");
+                }
 
-                reader.onload = function(e) {
-                    try {
-                        const json = JSON.parse(e.target.result);
-                        allData.push(analyzeSingleNight(json));
-                    } catch (err) {
-                        console.error("Error reading file:", file.name);
-                    }
+                const files = await response.json();
+                const jsonFiles = files.filter(file => file.name.endsWith('.json'));
 
-                    filesRead++;
-                    if (filesRead === files.length) {
-                        // Sort by date ascending
-                        allData.sort((a, b) => new Date(a.date) - new Date(b.date));
-                        displayDashboard(allData);
-                    }
-                };
-                reader.readAsText(file);
+                let allData = [];
+
+                // Read the content of each file
+                for (let file of jsonFiles) {
+                    const fileResponse = await fetch(file.download_url);
+                    const jsonData = await fileResponse.json();
+                    allData.push(analyzeSingleNight(jsonData));
+                }
+
+                // Sort by date and display
+                allData.sort((a, b) => new Date(a.date) - new Date(b.date));
+                document.getElementById('loading').style.display = 'none';
+                displayDashboard(allData);
+
+            } catch (error) {
+                alert("Error: " + error.message);
+                document.getElementById('fetch-btn').style.display = 'inline-block';
+                document.getElementById('loading').style.display = 'none';
             }
         }
 
-        // Function to analyze a single night and extract insights
+        // --- Analysis Algorithm ---
         function analyzeSingleNight(data) {
             const dto = data.dailySleepDTO;
             const levels = data.sleepLevels || [];
             
-            // Calculate duration from Garmin's raw seconds
             const totalHours = Math.floor(dto.sleepTimeSeconds / 3600);
             const totalMins = Math.floor((dto.sleepTimeSeconds % 3600) / 60);
             
-            // Convert timestamps to clear readable times (AM/PM)
             const startTime = new Date(dto.sleepStartTimestampLocal).toLocaleTimeString('en-US', {hour: '2-digit', minute:'2-digit'});
             const endTime = new Date(dto.sleepEndTimestampLocal).toLocaleTimeString('en-US', {hour: '2-digit', minute:'2-digit'});
 
-            // REM & Deep Sleep Analysis
             let remDurations = [];
-            let deepCount = 0; // Used as a proxy for counting sleep cycles
+            let deepCount = 0; 
 
             levels.forEach(level => {
                 if (level.activityLevel === 2) { // 2 = REM
@@ -195,15 +206,12 @@
                 }
             });
 
-            // Sleep cycles calculation
             const sleepCycles = deepCount > 0 ? deepCount : 1; 
 
-            // REM Calculations
             const totalRemMins = remDurations.reduce((a, b) => a + b, 0);
             const avgRem = remDurations.length > 0 ? Math.round(totalRemMins / remDurations.length) : 0;
             const maxRem = remDurations.length > 0 ? Math.round(Math.max(...remDurations)) : 0;
 
-            // Generate daily insight
             let insight = "";
             if (sleepCycles >= 4 && avgRem > 15) {
                 insight = "Your brain got excellent recovery tonight! A perfect day for complex learning and problem-solving.";
@@ -230,11 +238,9 @@
             };
         }
 
-        // Function to render everything onto the screen
         function displayDashboard(allData) {
             document.getElementById('dashboard').style.display = 'block';
             
-            // 1. Calculate and display Overall Stats
             let totalSecs = 0, totalCycles = 0, totalAvgRem = 0;
             allData.forEach(day => {
                 totalSecs += day.sleepTimeSeconds;
@@ -243,6 +249,8 @@
             });
 
             const daysCount = allData.length;
+            if(daysCount === 0) return;
+
             const overallAvgHours = Math.floor((totalSecs / daysCount) / 3600);
             const overallAvgMins = Math.floor(((totalSecs / daysCount) % 3600) / 60);
             
@@ -266,7 +274,6 @@
             `;
             document.getElementById('overall-container').innerHTML = overallHtml;
 
-            // 2. Display Daily Breakdown Cards
             let dailyHtml = '';
             allData.forEach(day => {
                 dailyHtml += `
